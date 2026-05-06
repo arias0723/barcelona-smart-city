@@ -1,0 +1,41 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DynamoDBMobilityWrite",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:PutItem",
+        "dynamodb:BatchWriteItem",
+        "dynamodb:GetItem",
+        "dynamodb:Query"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:eu-west-1:*:table/BicingStations",
+        "arn:aws:dynamodb:eu-west-1:*:table/BicingStations/index/*",
+        "arn:aws:dynamodb:eu-west-1:*:table/TransitStops",
+        "arn:aws:dynamodb:eu-west-1:*:table/TransitStops/index/*",
+        "arn:aws:dynamodb:eu-west-1:*:table/ScheduleCache"
+      ]
+    },
+    {
+      "Sid": "S3RawDataWrite",
+      "Effect": "Allow",
+      "Action": [
+        "s3:PutObject",
+        "s3:GetObject"
+      ],
+      "Resource": "arn:aws:s3:::smart-city-raw-*/*"
+    },
+    {
+      "Sid": "CloudWatchLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:eu-west-1:*:log-group:/aws/lambda/smart-city-*"
+    }
+  ]
+}

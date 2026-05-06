@@ -1,0 +1,33 @@
+# Credentials — NEVER commit
+.env
+*.env
+!.env.example
+
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# AWS
+*.zip
+/tmp/
+
+# Jupyter
+.ipynb_checkpoints/
