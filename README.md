@@ -137,7 +137,22 @@ See [`docs/AWS_SETUP.md`](docs/AWS_SETUP.md) for the full guide, DynamoDB schema
 
 ---
 
-## What Jia and Jose need to do
+## What each person needs to do
+
+### Mark — Air Quality vertical
+See **[`docs/MARK_AIR_QUALITY.md`](docs/MARK_AIR_QUALITY.md)** for the full data source, DynamoDB schema, and API details.
+
+**Status: Lambda deployed + chatbot tool integrated ✅**
+
+- `smart-city-air-quality-ingest` Lambda runs every hour, pulling from [Open Data BCN XVPCA API](https://opendata-ajuntament.barcelona.cat/data/en/dataset/qualitat-aire-detall-bcn)
+- Covers 4 stations: Poblenou, Sants, Eixample, Gràcia — pollutants NO2, PM10, O3, CO
+- `AirQualityReadings` DynamoDB table is live and populated
+- `get_air_quality(lat, lon)` chatbot tool is wired into the demo — the AI uses it automatically when asked about air quality, pollution, or outdoor safety
+
+**If you want to extend it:**
+- Add more stations to the haversine lookup table in `demo/app.py` (`XVPCA_STATIONS` dict, around line 210)
+- Add SO2/NOX to the pollutants queried in `run_tool()` under `get_air_quality`
+- The `AirQualityReadings` table schema is in [`docs/MARK_AIR_QUALITY.md`](docs/MARK_AIR_QUALITY.md)
 
 ### Jia — Weather vertical
 See **[`docs/JIA_WEATHER.md`](docs/JIA_WEATHER.md)** for step-by-step instructions.
