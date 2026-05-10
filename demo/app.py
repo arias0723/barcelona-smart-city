@@ -111,10 +111,10 @@ ALL_TOOLS = [MCP_TOOL_GET_TRANSIT_ROUTE, TOOL_GET_BICING, TOOL_GET_TRANSIT_NEARB
 # Tool execution
 # ---------------------------------------------------------------------------
 
-TMB_APP_ID  = "74309501"
-TMB_APP_KEY = "c7234d6f7249b444f6158f41a0ad4fce"
-BSM_BASE    = "https://api.bsmsa.eu/ext/api/bsm/gbfs/v2/en"
-TMB_BASE    = "https://api.tmb.cat/v1"
+TMB_APP_ID     = "74309501"
+TMB_APP_KEY    = "c7234d6f7249b444f6158f41a0ad4fce"
+CITYBIKES_URL  = "https://api.citybik.es/v2/networks/bicing"  # BSM API blocked as of May 2026
+TMB_BASE       = "https://api.tmb.cat/v1"
 
 
 def run_tool(name: str, inputs: dict) -> Any:
@@ -122,43 +122,41 @@ def run_tool(name: str, inputs: dict) -> Any:
         return get_transit_route(**inputs)
 
     if name == "get_bicing":
-        lat = inputs["lat"]
-        lon = inputs["lon"]
+        lat          = inputs["lat"]
+        lon          = inputs["lon"]
         max_results  = inputs.get("max_results", 5)
         max_radius_m = inputs.get("max_radius_m", 1500)
         try:
-            info_r   = requests.get(f"{BSM_BASE}/station_information.json", timeout=8)
-            status_r = requests.get(f"{BSM_BASE}/station_status.json", timeout=8)
-            if not info_r.ok or not status_r.ok:
-                return {"error": f"Bicing API returned {info_r.status_code}", "stations": []}
-            info_by_id = {s["station_id"]: s for s in info_r.json()["data"]["stations"]}
+            r = requests.get(CITYBIKES_URL, timeout=10)
+            if not r.ok:
+                return {"error": f"citybik.es returned {r.status_code}", "stations": []}
+            stations = r.json().get("network", {}).get("stations", [])
             results = []
-            for s in status_r.json()["data"]["stations"]:
-                sid  = s["station_id"]
-                info = info_by_id.get(sid, {})
-                slat = info.get("lat", 0)
-                slon = info.get("lon", 0)
-                dist = _haversine(lat, lon, slat, slon)
+            for s in stations:
+                extra = s.get("extra", {})
+                slat  = s.get("latitude", 0)
+                slon  = s.get("longitude", 0)
+                dist  = _haversine(lat, lon, slat, slon)
                 if dist > max_radius_m:
                     continue
-                types = s.get("num_bikes_available_types", {})
                 results.append({
-                    "station_id": sid,
-                    "name": info.get("name", sid),
-                    "distance_m": round(dist),
-                    "lat": slat, "lon": slon,
-                    "bikes_available": s.get("num_bikes_available", 0),
-                    "ebikes": types.get("ebike", 0),
-                    "mechanical": types.get("mechanical", 0),
-                    "docks_available": s.get("num_docks_available", 0),
-                    "is_renting": bool(s.get("is_renting", 0)),
-                    "last_reported": s.get("last_reported", 0),
+                    "station_id":    str(extra.get("uid", s.get("id", "?"))),
+                    "name":          s.get("name", "?").strip(),
+                    "distance_m":    round(dist),
+                    "lat":           slat,
+                    "lon":           slon,
+                    "bikes_available": int(s.get("free_bikes", 0)),
+                    "ebikes":          int(extra.get("ebikes", 0)),
+                    "mechanical":      int(extra.get("normal_bikes", 0)),
+                    "docks_available": int(s.get("empty_slots", 0)),
+                    "is_renting":      bool(extra.get("online", False)),
+                    "last_reported":   s.get("timestamp", ""),
                 })
             results.sort(key=lambda x: x["distance_m"])
             return {
-                "fetched_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                "fetched_at":    time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
                 "stations_found": len(results[:max_results]),
-                "stations": results[:max_results],
+                "stations":       results[:max_results],
             }
         except Exception as e:
             return {"error": str(e), "stations": []}

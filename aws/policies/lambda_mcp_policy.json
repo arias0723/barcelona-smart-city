@@ -1,0 +1,34 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DynamoDBReadAll",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:GetItem",
+        "dynamodb:Query",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:eu-west-1:*:table/BicingStations",
+        "arn:aws:dynamodb:eu-west-1:*:table/BicingStations/index/*",
+        "arn:aws:dynamodb:eu-west-1:*:table/TransitStops",
+        "arn:aws:dynamodb:eu-west-1:*:table/TransitStops/index/*",
+        "arn:aws:dynamodb:eu-west-1:*:table/AirQualityReadings",
+        "arn:aws:dynamodb:eu-west-1:*:table/AirQualityReadings/index/*",
+        "arn:aws:dynamodb:eu-west-1:*:table/WeatherData",
+        "arn:aws:dynamodb:eu-west-1:*:table/WeatherData/index/*"
+      ]
+    },
+    {
+      "Sid": "CloudWatchLogs",
+      "Effect": "Allow",
+      "Action": [
+        "logs:CreateLogGroup",
+        "logs:CreateLogStream",
+        "logs:PutLogEvents"
+      ],
+      "Resource": "arn:aws:logs:eu-west-1:*:log-group:/aws/lambda/smart-city-*"
+    }
+  ]
+}

@@ -1,13 +1,22 @@
 """
 Lambda: smart-city-bicing-ingest
 =================================
-Fetches live Bicing GBFS data and writes each station snapshot to DynamoDB.
+Fetches live Bicing data from citybik.es (public GBFS mirror) and writes
+each station snapshot to DynamoDB.
 Triggered by EventBridge every 5 minutes.
 
+Data source: https://api.citybik.es/v2/networks/bicing
+  - 543 Barcelona stations, no auth required
+  - Fields: id, name, latitude, longitude, free_bikes, empty_slots,
+            extra.normal_bikes, extra.ebikes, extra.uid, extra.online
+
+NOTE: Previous source (api.bsmsa.eu) returns HTTP 503 error 700700
+"API blocked temporarily" as of May 2026.
+
 DynamoDB table: BicingStations
-  PK: station_id (S)   — stable BSM station identifier
+  PK: station_id (S)   — extra.uid as string (stable BSM station number)
   SK: updated_at (N)   — Unix epoch of this write
-  TTL: ttl (N)         — updated_at + 3600 (1 hour)
+  TTL: ttl (N)         — 30 days (enables historical queries)
 
 Environment variables:
   TABLE_NAME   — DynamoDB table (default: BicingStations)
@@ -22,27 +31,18 @@ import urllib.error
 from decimal import Decimal, InvalidOperation
 
 import boto3
-from boto3.dynamodb.conditions import Key  # noqa: F401 (available if needed)
 
-# ---------------------------------------------------------------------------
-# Config
-# ---------------------------------------------------------------------------
-TABLE_NAME = os.environ.get("TABLE_NAME", "BicingStations")
-REGION     = os.environ.get("AWS_REGION", "eu-west-1")
-
-BASE_URL           = "https://api.bsmsa.eu/ext/api/bsm/gbfs/v2/en"
-STATION_INFO_URL   = f"{BASE_URL}/station_information.json"
-STATION_STATUS_URL = f"{BASE_URL}/station_status.json"
+TABLE_NAME    = os.environ.get("TABLE_NAME", "BicingStations")
+REGION        = os.environ.get("AWS_REGION", "eu-west-1")
+CITYBIKES_URL = "https://api.citybik.es/v2/networks/bicing"
 
 dynamodb = boto3.resource("dynamodb", region_name=REGION)
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+
 def _fetch(url: str) -> dict | None:
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "smart-city-ingest/1.0"})
-        with urllib.request.urlopen(req, timeout=15) as resp:
+        with urllib.request.urlopen(req, timeout=20) as resp:
             return json.loads(resp.read().decode())
     except urllib.error.HTTPError as e:
         print(f"HTTP {e.code} fetching {url}")
@@ -52,7 +52,6 @@ def _fetch(url: str) -> dict | None:
 
 
 def _d(v) -> Decimal:
-    """Convert a value to Decimal safely (required for DynamoDB numeric types)."""
     if v is None:
         return Decimal("0")
     try:
@@ -61,82 +60,68 @@ def _d(v) -> Decimal:
         return Decimal("0")
 
 
-# ---------------------------------------------------------------------------
-# Handler
-# ---------------------------------------------------------------------------
 def lambda_handler(event, context):
-    print("Fetching Bicing GBFS data …")
+    print("Fetching Bicing data from citybik.es …")
 
-    info_raw   = _fetch(STATION_INFO_URL)
-    status_raw = _fetch(STATION_STATUS_URL)
-
-    if info_raw is None or status_raw is None:
-        msg = "Bicing API unavailable (503 or connection error)"
+    data = _fetch(CITYBIKES_URL)
+    if data is None:
+        msg = "citybik.es Bicing API unavailable"
         print(msg)
         return {"statusCode": 503, "body": msg}
 
-    info_list   = info_raw["data"]["stations"]
-    status_list = status_raw["data"]["stations"]
-    status_map  = {s["station_id"]: s for s in status_list}
+    stations = data.get("network", {}).get("stations", [])
+    if not stations:
+        msg = "No stations in citybik.es response"
+        print(msg)
+        return {"statusCode": 500, "body": msg}
 
     now = int(time.time())
-    ttl = now + 3600  # keep 1 hour of snapshots
+    ttl = now + 30 * 24 * 3600  # 30 days
 
     table   = dynamodb.Table(TABLE_NAME)
     written = 0
     skipped = 0
 
     with table.batch_writer() as batch:
-        for info in info_list:
-            sid = str(info["station_id"])
-            st  = status_map.get(info["station_id"], {})
+        for s in stations:
+            extra = s.get("extra", {})
+            uid   = extra.get("uid")
+            if uid is None:
+                skipped += 1
+                continue
 
-            lat = info.get("lat", 0)
-            lon = info.get("lon", 0)
-
-            # Flatten e-bike / mechanical split (two possible GBFS field layouts)
-            bike_types = st.get("num_bikes_available_types", {})
-            if isinstance(bike_types, dict) and bike_types:
-                num_ebikes = bike_types.get("ebike", 0)
-                num_mech   = bike_types.get("mechanical", 0)
-            else:
-                num_ebikes = st.get("num_ebikes_available", 0)
-                num_mech   = st.get("num_mechanical_available",
-                                    st.get("num_bikes_available", 0) - num_ebikes)
+            lat = s.get("latitude", 0)
+            lon = s.get("longitude", 0)
+            free_bikes   = int(s.get("free_bikes", 0))
+            empty_slots  = int(s.get("empty_slots", 0))
+            normal_bikes = int(extra.get("normal_bikes", 0))
+            ebikes       = int(extra.get("ebikes", 0))
 
             item = {
-                "station_id":              sid,
-                "updated_at":              now,
-                "name":                    info.get("name", ""),
-                "short_name":              info.get("short_name", ""),
-                "lat":                     _d(lat),
-                "lon":                     _d(lon),
-                "lat_bucket":              str(round(float(lat), 2)),
-                "capacity":                int(info.get("capacity", 0)),
-                "num_bikes_available":     int(st.get("num_bikes_available", 0)),
-                "num_ebikes_available":    int(num_ebikes),
-                "num_mechanical_available":int(num_mech),
-                "num_docks_available":     int(st.get("num_docks_available", 0)),
-                "num_docks_disabled":      int(st.get("num_docks_disabled", 0)),
-                "is_installed":            int(st.get("is_installed", 0)),
-                "is_renting":              int(st.get("is_renting", 0)),
-                "is_returning":            int(st.get("is_returning", 0)),
-                "last_reported":           int(st.get("last_reported", 0)),
-                "ttl":                     ttl,
+                "station_id":               str(uid),
+                "updated_at":               now,
+                "name":                     s.get("name", "").strip(),
+                "lat":                      _d(lat),
+                "lon":                      _d(lon),
+                "lat_bucket":               str(round(float(lat), 2)),
+                "capacity":                 free_bikes + empty_slots,
+                "num_bikes_available":      free_bikes,
+                "num_ebikes_available":     ebikes,
+                "num_mechanical_available": normal_bikes,
+                "num_docks_available":      empty_slots,
+                "is_renting":               1 if extra.get("online", False) else 0,
+                "is_returning":             1 if extra.get("online", False) else 0,
+                "last_reported":            now,
+                "ttl":                      ttl,
             }
 
             try:
                 batch.put_item(Item=item)
                 written += 1
             except Exception as e:
-                print(f"Write error station {sid}: {e}")
+                print(f"Write error station {uid}: {e}")
                 skipped += 1
 
-    result = {
-        "written":   written,
-        "skipped":   skipped,
-        "timestamp": now,
-        "table":     TABLE_NAME,
-    }
+    result = {"written": written, "skipped": skipped, "timestamp": now, "table": TABLE_NAME}
     print(f"Done: {result}")
     return {"statusCode": 200, "body": json.dumps(result)}

@@ -20,10 +20,13 @@ set -euo pipefail
 REGION="${AWS_REGION:-eu-west-1}"
 ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 LAMBDAS_DIR="$(dirname "$0")/lambdas"
+POLICIES_DIR="$(dirname "$0")/policies"
 TARGET="${1:-all}"
 
 MOBILITY_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/smart-city-lambda-mobility-role"
 AIR_QUALITY_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/smart-city-lambda-air-quality-role"
+WEATHER_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/smart-city-lambda-weather-role"
+MCP_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/smart-city-lambda-mcp-role"
 
 echo "============================================"
 echo "  Smart City Lambda Deployment"
@@ -31,6 +34,34 @@ echo "  Account : $ACCOUNT_ID"
 echo "  Region  : $REGION"
 echo "  Target  : $TARGET"
 echo "============================================"
+
+# ---------------------------------------------------------------------------
+# Helper: ensure IAM role exists, create if not
+# ---------------------------------------------------------------------------
+ensure_role() {
+  local role_name="$1"
+  local trust_policy_file="$2"
+  local inline_policy_file="$3"
+  local inline_policy_name="$4"
+
+  if aws iam get-role --role-name "$role_name" \
+      --query 'Role.RoleName' --output text 2>/dev/null | grep -q "$role_name"; then
+    echo "    SKIP  IAM role $role_name already exists"
+  else
+    echo "    CREATE IAM role $role_name"
+    aws iam create-role \
+      --role-name "$role_name" \
+      --assume-role-policy-document "file://${POLICIES_DIR}/${trust_policy_file}" \
+      > /dev/null
+    aws iam put-role-policy \
+      --role-name "$role_name" \
+      --policy-name "$inline_policy_name" \
+      --policy-document "file://${POLICIES_DIR}/${inline_policy_file}" \
+      > /dev/null
+    echo "    OK    $role_name created"
+    sleep 10  # IAM propagation delay
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # Helper: zip a Lambda directory into /tmp, return zip path
@@ -165,14 +196,213 @@ deploy_air_quality() {
 }
 
 # ---------------------------------------------------------------------------
+# Deploy Weather ingest
+# ---------------------------------------------------------------------------
+deploy_weather() {
+  echo ""
+  echo "[Weather Ingest]"
+  ensure_role \
+    "smart-city-lambda-weather-role" \
+    "lambda_trust_policy.json" \
+    "lambda_weather_policy.json" \
+    "smart-city-weather-inline"
+
+  ZIP=$(package_lambda weather_ingest)
+  deploy_function \
+    "smart-city-weather-ingest" \
+    "$ZIP" \
+    "$WEATHER_ROLE" \
+    "lambda_function.lambda_handler" \
+    "TABLE_NAME=WeatherData,DYNAMO_REGION=${REGION}" \
+    "Fetches Barcelona weather from Open-Meteo every hour"
+
+  create_schedule "smart-city-weather-schedule" "rate(1 hour)" "smart-city-weather-ingest"
+}
+
+# ---------------------------------------------------------------------------
+# Deploy MCP server Lambda + API Gateway HTTP API
+# ---------------------------------------------------------------------------
+deploy_mcp() {
+  echo ""
+  echo "[MCP Server Lambda + API Gateway]"
+
+  ensure_role \
+    "smart-city-lambda-mcp-role" \
+    "lambda_trust_policy.json" \
+    "lambda_mcp_policy.json" \
+    "smart-city-mcp-inline"
+
+  # Package: include mcp and mangum from venv
+  echo ""
+  echo "  Packaging mcp_server …"
+  MCP_ZIP="/tmp/smart-city-mcp-server.zip"
+  rm -f "$MCP_ZIP"
+
+  # Build a clean package dir
+  PKG_DIR="/tmp/smart-city-mcp-pkg"
+  rm -rf "$PKG_DIR" && mkdir -p "$PKG_DIR"
+
+  # Install all dependencies for Linux x86_64 (Lambda runtime)
+  pip install \
+    "mcp[cli]" \
+    "requests" \
+    "boto3" \
+    --target "$PKG_DIR" \
+    --platform manylinux2014_x86_64 \
+    --implementation cp \
+    --python-version 3.12 \
+    --only-binary=:all: \
+    --quiet
+
+  # Copy our Lambda handler
+  cp "$(dirname "$0")/../mcp_server.py" "$PKG_DIR/lambda_function.py"
+  # Copy transit route tool (imported by mcp_server)
+  cp "$(dirname "$0")/../transit_route_tool.py" "$PKG_DIR/transit_route_tool.py"
+
+  (cd "$PKG_DIR" && zip -q -r "$MCP_ZIP" .)
+  echo "    ZIP: $MCP_ZIP ($(du -sh "$MCP_ZIP" | cut -f1))"
+
+  # Deploy Lambda (512MB, 30s timeout for cold starts with mcp package)
+  FUNC_NAME="smart-city-mcp-server"
+  if aws lambda get-function --function-name "$FUNC_NAME" --region "$REGION" \
+      --query 'Configuration.FunctionName' --output text 2>/dev/null; then
+    echo "    UPDATE $FUNC_NAME"
+    aws lambda update-function-code \
+      --function-name "$FUNC_NAME" \
+      --zip-file "fileb://${MCP_ZIP}" \
+      --region "$REGION" > /dev/null
+  else
+    echo "    CREATE $FUNC_NAME"
+    aws lambda create-function \
+      --function-name "$FUNC_NAME" \
+      --runtime python3.12 \
+      --handler "lambda_function.handler" \
+      --role "$MCP_ROLE" \
+      --zip-file "fileb://${MCP_ZIP}" \
+      --timeout 30 \
+      --memory-size 512 \
+      --description "Barcelona Smart City MCP server — exposed via API Gateway" \
+      --environment "Variables={DYNAMO_REGION=${REGION}}" \
+      --region "$REGION" > /dev/null
+  fi
+  echo "    OK    $FUNC_NAME deployed"
+
+  # API Gateway HTTP API
+  API_NAME="smart-city-mcp-api"
+  EXISTING_API=$(aws apigatewayv2 get-apis --region "$REGION" \
+    --query "Items[?Name=='${API_NAME}'].ApiId" --output text 2>/dev/null || true)
+
+  if [ -n "$EXISTING_API" ]; then
+    echo "    SKIP  API Gateway $API_NAME already exists (ID: $EXISTING_API)"
+    API_ID="$EXISTING_API"
+  else
+    echo "    CREATE API Gateway HTTP API: $API_NAME"
+    API_ID=$(aws apigatewayv2 create-api \
+      --name "$API_NAME" \
+      --protocol-type HTTP \
+      --description "Barcelona Smart City MCP server endpoint" \
+      --cors-configuration \
+        AllowOrigins='["*"]',AllowMethods='["POST","GET","OPTIONS"]',AllowHeaders='["*"]',MaxAge=300 \
+      --region "$REGION" \
+      --query 'ApiId' --output text)
+    echo "    OK    API created: $API_ID"
+  fi
+
+  LAMBDA_ARN=$(aws lambda get-function \
+    --function-name "$FUNC_NAME" \
+    --region "$REGION" \
+    --query 'Configuration.FunctionArn' --output text)
+
+  # Lambda integration (AWS_PROXY)
+  INTEGRATION_ID=$(aws apigatewayv2 get-integrations \
+    --api-id "$API_ID" --region "$REGION" \
+    --query 'Items[0].IntegrationId' --output text 2>/dev/null || true)
+
+  if [ -z "$INTEGRATION_ID" ] || [ "$INTEGRATION_ID" = "None" ]; then
+    echo "    CREATE Lambda integration"
+    INTEGRATION_ID=$(aws apigatewayv2 create-integration \
+      --api-id "$API_ID" \
+      --integration-type AWS_PROXY \
+      --integration-uri "$LAMBDA_ARN" \
+      --payload-format-version "2.0" \
+      --region "$REGION" \
+      --query 'IntegrationId' --output text)
+    echo "    OK    Integration: $INTEGRATION_ID"
+  else
+    echo "    SKIP  Integration already exists: $INTEGRATION_ID"
+  fi
+
+  # Route: ANY /{proxy+}
+  ROUTE_EXISTS=$(aws apigatewayv2 get-routes \
+    --api-id "$API_ID" --region "$REGION" \
+    --query "Items[?RouteKey=='\$default'].RouteId" --output text 2>/dev/null || true)
+
+  if [ -z "$ROUTE_EXISTS" ] || [ "$ROUTE_EXISTS" = "None" ]; then
+    echo "    CREATE default route"
+    aws apigatewayv2 create-route \
+      --api-id "$API_ID" \
+      --route-key '$default' \
+      --target "integrations/${INTEGRATION_ID}" \
+      --region "$REGION" > /dev/null
+    echo "    OK    Route created"
+  else
+    echo "    SKIP  Default route already exists"
+  fi
+
+  # Auto-deploy stage
+  STAGE_EXISTS=$(aws apigatewayv2 get-stages \
+    --api-id "$API_ID" --region "$REGION" \
+    --query "Items[?StageName=='\$default'].StageName" --output text 2>/dev/null || true)
+
+  if [ -z "$STAGE_EXISTS" ] || [ "$STAGE_EXISTS" = "None" ]; then
+    echo "    CREATE auto-deploy stage"
+    aws apigatewayv2 create-stage \
+      --api-id "$API_ID" \
+      --stage-name '$default' \
+      --auto-deploy \
+      --region "$REGION" > /dev/null
+    echo "    OK    Stage created"
+  else
+    echo "    SKIP  Default stage already exists"
+  fi
+
+  # Grant API Gateway permission to invoke Lambda
+  aws lambda add-permission \
+    --function-name "$FUNC_NAME" \
+    --statement-id "apigateway-invoke" \
+    --action "lambda:InvokeFunction" \
+    --principal "apigateway.amazonaws.com" \
+    --source-arn "arn:aws:execute-api:${REGION}:${ACCOUNT_ID}:${API_ID}/*/*" \
+    --region "$REGION" > /dev/null 2>&1 || true
+
+  API_URL="https://${API_ID}.execute-api.${REGION}.amazonaws.com/mcp"
+  echo ""
+  echo "  ============================================"
+  echo "  MCP server endpoint:"
+  echo "  $API_URL"
+  echo ""
+  echo "  Add to Claude Desktop (~/.config/claude/claude_desktop_config.json):"
+  echo "  {"
+  echo "    \"mcpServers\": {"
+  echo "      \"barcelona-smart-city\": {"
+  echo "        \"url\": \"${API_URL}\""
+  echo "      }"
+  echo "    }"
+  echo "  }"
+  echo "  ============================================"
+}
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 case "$TARGET" in
   bicing)       deploy_bicing ;;
   air_quality)  deploy_air_quality ;;
-  all)          deploy_bicing; deploy_air_quality ;;
+  weather)      deploy_weather ;;
+  mcp)          deploy_mcp ;;
+  all)          deploy_bicing; deploy_air_quality; deploy_weather; deploy_mcp ;;
   *)
-    echo "ERROR: unknown target '$TARGET'. Use: bicing | air_quality | all"
+    echo "ERROR: unknown target '$TARGET'. Use: bicing | air_quality | weather | mcp | all"
     exit 1
     ;;
 esac

@@ -143,7 +143,7 @@ def lambda_handler(event, context):
 
     records  = data["result"]["records"]
     ts_unix  = int(now.timestamp())
-    ttl      = ts_unix + 172800  # 48 hours
+    ttl      = ts_unix + 30 * 24 * 3600  # 30 days — enables historical queries
 
     table    = dynamodb.Table(TABLE_NAME)
     written  = 0

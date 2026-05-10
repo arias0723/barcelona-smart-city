@@ -10,9 +10,9 @@ An AI-powered smart city dashboard for Barcelona. A Claude-backed chatbot answer
 
 | Name | Vertical | Status |
 |------|----------|--------|
-| Jakub Dusza | Mobility (Bicing + Transit) | ✅ Done |
+| Jakub Dusza | Mobility (Bicing + Transit) + MCP server | ✅ Done |
 | Mark Welf Atzberger | Air Quality | ✅ Done |
-| Jia Lyu | Weather | ⏳ Lambda needed |
+| Jia Lyu | Weather | ✅ Lambda deployed |
 | Jose Ricardo Arias Perez | Noise | ⏳ Lambda needed |
 
 ---
@@ -54,6 +54,8 @@ bash demo/run.sh
 ```
 
 The demo uses AWS Bedrock (eu-north-1) for Claude Haiku and DynamoDB (eu-west-1) for live city data.
+
+**MCP server (live):** `https://9llxtl8mm3.execute-api.eu-west-1.amazonaws.com/mcp` — connect from claude.ai or Claude Desktop to get Barcelona city tools in any Claude conversation.
 
 ---
 
@@ -115,9 +117,12 @@ The Claude Haiku model has access to these tools, all backed by live AWS data:
 | Tool | What it does |
 |------|-------------|
 | `get_transit_route` | Finds bus/metro routes between two Barcelona points via Transitous |
-| `get_bicing` | Returns Bicing station availability near a coordinate |
+| `get_bicing` | Returns live Bicing station availability near a coordinate (via citybik.es) |
+| `get_bicing_history` | Historical Bicing snapshots for a station (up to 30 days, every 5 min) |
 | `get_transit_nearby` | Lists metro/bus stops near a coordinate from DynamoDB |
 | `get_air_quality` | Returns latest NO2/PM10/O3/CO readings from the nearest XVPCA station |
+| `get_air_quality_history` | Historical hourly air quality for a station + pollutant |
+| `get_weather` | Current Barcelona weather (temperature, wind, precipitation) |
 
 ---
 
@@ -125,10 +130,12 @@ The Claude Haiku model has access to these tools, all backed by live AWS data:
 
 All infrastructure is already deployed on account `539592518821` (eu-west-1).
 
+**MCP server endpoint:** `https://9llxtl8mm3.execute-api.eu-west-1.amazonaws.com/mcp`
+
 To recreate from scratch on a new account:
 ```bash
-bash aws/setup.sh      # ~2 min — creates tables, roles, S3
-bash aws/deploy.sh     # ~30 sec — deploys Lambdas + schedules
+bash aws/setup.sh         # ~2 min — creates tables, roles, S3
+bash aws/deploy.sh all    # deploys Bicing + AQ + Weather Lambdas + MCP server + API Gateway
 python3 aws/scripts/load_gtfs.py   # one-time GTFS load (~60 sec)
 python3 aws/scripts/verify_data.py # confirm everything is working
 ```

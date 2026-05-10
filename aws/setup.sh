@@ -273,37 +273,52 @@ fi
 echo ""
 echo "[3/5] IAM roles..."
 
-# -- Mobility role --
-if role_exists smart-city-lambda-mobility-role > /dev/null 2>&1; then
-  echo "      SKIP  smart-city-lambda-mobility-role already exists"
-else
-  aws iam create-role \
-    --role-name smart-city-lambda-mobility-role \
-    --assume-role-policy-document "file://${POLICIES_DIR}/lambda_trust_policy.json" \
-    --description "Lambda execution role for mobility vertical (Bicing + Transit)" \
-    > /dev/null
-  aws iam put-role-policy \
-    --role-name smart-city-lambda-mobility-role \
-    --policy-name smart-city-mobility-inline \
-    --policy-document "file://${POLICIES_DIR}/lambda_mobility_policy.json"
-  echo "      OK    smart-city-lambda-mobility-role created"
-fi
+create_lambda_role() {
+  local role_name="$1"
+  local policy_file="$2"
+  local policy_name="$3"
+  local description="$4"
 
-# -- Air quality role --
-if role_exists smart-city-lambda-air-quality-role > /dev/null 2>&1; then
-  echo "      SKIP  smart-city-lambda-air-quality-role already exists"
-else
-  aws iam create-role \
-    --role-name smart-city-lambda-air-quality-role \
-    --assume-role-policy-document "file://${POLICIES_DIR}/lambda_trust_policy.json" \
-    --description "Lambda execution role for air quality vertical (XVPCA / Open Data BCN)" \
-    > /dev/null
-  aws iam put-role-policy \
-    --role-name smart-city-lambda-air-quality-role \
-    --policy-name smart-city-air-quality-inline \
-    --policy-document "file://${POLICIES_DIR}/lambda_air_quality_policy.json"
-  echo "      OK    smart-city-lambda-air-quality-role created"
-fi
+  if role_exists "$role_name" > /dev/null 2>&1; then
+    echo "      SKIP  $role_name already exists"
+  else
+    aws iam create-role \
+      --role-name "$role_name" \
+      --assume-role-policy-document "file://${POLICIES_DIR}/lambda_trust_policy.json" \
+      --description "$description" \
+      > /dev/null
+    aws iam put-role-policy \
+      --role-name "$role_name" \
+      --policy-name "$policy_name" \
+      --policy-document "file://${POLICIES_DIR}/${policy_file}" \
+      > /dev/null
+    echo "      OK    $role_name created"
+  fi
+}
+
+create_lambda_role \
+  "smart-city-lambda-mobility-role" \
+  "lambda_mobility_policy.json" \
+  "smart-city-mobility-inline" \
+  "Lambda execution role for mobility vertical (Bicing + Transit)"
+
+create_lambda_role \
+  "smart-city-lambda-air-quality-role" \
+  "lambda_air_quality_policy.json" \
+  "smart-city-air-quality-inline" \
+  "Lambda execution role for air quality vertical (XVPCA / Open Data BCN)"
+
+create_lambda_role \
+  "smart-city-lambda-weather-role" \
+  "lambda_weather_policy.json" \
+  "smart-city-weather-inline" \
+  "Lambda execution role for weather vertical (Open-Meteo)"
+
+create_lambda_role \
+  "smart-city-lambda-mcp-role" \
+  "lambda_mcp_policy.json" \
+  "smart-city-mcp-inline" \
+  "Lambda execution role for MCP server (read-only DynamoDB access)"
 
 # ---------------------------------------------------------------------------
 # 4. Wait for tables to become ACTIVE
@@ -331,9 +346,11 @@ echo "  DynamoDB     : BicingStations, TransitStops, ScheduleCache"
 echo "                 AirQualityReadings, WeatherData, NoiseData"
 echo "  IAM roles    : smart-city-lambda-mobility-role"
 echo "                 smart-city-lambda-air-quality-role"
+echo "                 smart-city-lambda-weather-role"
+echo "                 smart-city-lambda-mcp-role"
 echo ""
 echo "  Next steps:"
-echo "    1. Deploy Lambda functions:  bash aws/deploy.sh"
+echo "    1. Deploy all Lambdas + MCP: bash aws/deploy.sh all"
 echo "    2. Load GTFS stop data:      python3 aws/scripts/load_gtfs.py"
 echo "    3. Verify data is flowing:   python3 aws/scripts/verify_data.py"
 echo ""
