@@ -26,6 +26,8 @@ TARGET="${1:-all}"
 MOBILITY_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/smart-city-lambda-mobility-role"
 AIR_QUALITY_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/smart-city-lambda-air-quality-role"
 WEATHER_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/smart-city-lambda-weather-role"
+UV_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/smart-city-lambda-uv-role"
+POLLEN_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/smart-city-lambda-pollen-role"
 MCP_ROLE="arn:aws:iam::${ACCOUNT_ID}:role/smart-city-lambda-mcp-role"
 
 echo "============================================"
@@ -220,6 +222,54 @@ deploy_weather() {
 }
 
 # ---------------------------------------------------------------------------
+# Deploy UV index ingest
+# ---------------------------------------------------------------------------
+deploy_uv() {
+  echo ""
+  echo "[UV Index Ingest]"
+  ensure_role \
+    "smart-city-lambda-uv-role" \
+    "lambda_trust_policy.json" \
+    "lambda_uv_policy.json" \
+    "smart-city-uv-inline"
+
+  ZIP=$(package_lambda uv_ingest)
+  deploy_function \
+    "smart-city-uv-ingest" \
+    "$ZIP" \
+    "$UV_ROLE" \
+    "lambda_function.lambda_handler" \
+    "TABLE_NAME=UVData,DYNAMO_REGION=${REGION}" \
+    "Fetches Barcelona UV index from currentuvindex.com every hour"
+
+  create_schedule "smart-city-uv-schedule" "rate(1 hour)" "smart-city-uv-ingest"
+}
+
+# ---------------------------------------------------------------------------
+# Deploy pollen ingest
+# ---------------------------------------------------------------------------
+deploy_pollen() {
+  echo ""
+  echo "[Pollen Ingest]"
+  ensure_role \
+    "smart-city-lambda-pollen-role" \
+    "lambda_trust_policy.json" \
+    "lambda_pollen_policy.json" \
+    "smart-city-pollen-inline"
+
+  ZIP=$(package_lambda pollen_ingest)
+  deploy_function \
+    "smart-city-pollen-ingest" \
+    "$ZIP" \
+    "$POLLEN_ROLE" \
+    "lambda_function.lambda_handler" \
+    "TABLE_NAME=PollenData,DYNAMO_REGION=${REGION}" \
+    "Fetches Barcelona pollen forecast from Open-Meteo every hour"
+
+  create_schedule "smart-city-pollen-schedule" "rate(1 hour)" "smart-city-pollen-ingest"
+}
+
+# ---------------------------------------------------------------------------
 # Deploy MCP server Lambda + API Gateway HTTP API
 # ---------------------------------------------------------------------------
 deploy_mcp() {
@@ -254,10 +304,10 @@ deploy_mcp() {
     --only-binary=:all: \
     --quiet
 
-  # Copy our Lambda handler
-  cp "$(dirname "$0")/../mcp_server.py" "$PKG_DIR/lambda_function.py"
-  # Copy transit route tool (imported by mcp_server)
-  cp "$(dirname "$0")/../transit_route_tool.py" "$PKG_DIR/transit_route_tool.py"
+  # Copy our Lambda handler (use absolute path resolved from script location)
+  REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+  cp "$REPO_ROOT/mcp_server.py" "$PKG_DIR/lambda_function.py"
+  cp "$REPO_ROOT/transit_route_tool.py" "$PKG_DIR/transit_route_tool.py"
 
   (cd "$PKG_DIR" && zip -q -r "$MCP_ZIP" .)
   echo "    ZIP: $MCP_ZIP ($(du -sh "$MCP_ZIP" | cut -f1))"
@@ -399,8 +449,10 @@ case "$TARGET" in
   bicing)       deploy_bicing ;;
   air_quality)  deploy_air_quality ;;
   weather)      deploy_weather ;;
+  uv)           deploy_uv ;;
+  pollen)       deploy_pollen ;;
   mcp)          deploy_mcp ;;
-  all)          deploy_bicing; deploy_air_quality; deploy_weather; deploy_mcp ;;
+  all)          deploy_bicing; deploy_air_quality; deploy_weather; deploy_uv; deploy_pollen; deploy_mcp ;;
   *)
     echo "ERROR: unknown target '$TARGET'. Use: bicing | air_quality | weather | mcp | all"
     exit 1

@@ -17,7 +17,11 @@
         "arn:aws:dynamodb:eu-west-1:*:table/AirQualityReadings",
         "arn:aws:dynamodb:eu-west-1:*:table/AirQualityReadings/index/*",
         "arn:aws:dynamodb:eu-west-1:*:table/WeatherData",
-        "arn:aws:dynamodb:eu-west-1:*:table/WeatherData/index/*"
+        "arn:aws:dynamodb:eu-west-1:*:table/WeatherData/index/*",
+        "arn:aws:dynamodb:eu-west-1:*:table/UVData",
+        "arn:aws:dynamodb:eu-west-1:*:table/UVData/index/*",
+        "arn:aws:dynamodb:eu-west-1:*:table/PollenData",
+        "arn:aws:dynamodb:eu-west-1:*:table/PollenData/index/*"
       ]
     },
     {

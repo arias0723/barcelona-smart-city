@@ -15,12 +15,16 @@
 # What this creates:
 #   - S3 bucket          : smart-city-raw-{ACCOUNT_ID}
 #   - DynamoDB tables    : BicingStations, TransitStops, ScheduleCache,
-#                          AirQualityReadings, WeatherData, NoiseData
+#                          AirQualityReadings, WeatherData,
+#                          UVData, PollenData
 #   - IAM roles          : smart-city-lambda-mobility-role
 #                          smart-city-lambda-air-quality-role
+#                          smart-city-lambda-weather-role
+#                          smart-city-lambda-mcp-role
 #   - IAM policies       : (inline, attached to roles above)
 #   - EventBridge rules  : bicing-ingest-schedule (every 5 min)
 #                          air-quality-ingest-schedule (every 1 hour)
+#                          weather-ingest-schedule (every 1 hour)
 # =============================================================================
 
 set -euo pipefail
@@ -248,24 +252,44 @@ else
   echo "      OK    WeatherData created (placeholder — Jia's vertical)"
 fi
 
-# -- NoiseData (placeholder for Jose) --
-if table_exists NoiseData > /dev/null 2>&1; then
-  echo "      SKIP  NoiseData already exists"
+# -- UVData --
+if table_exists UVData > /dev/null 2>&1; then
+  echo "      SKIP  UVData already exists"
 else
   aws dynamodb create-table \
-    --table-name NoiseData \
+    --table-name UVData \
     --attribute-definitions \
-      AttributeName=sensor_id,AttributeType=S \
-      AttributeName=timestamp,AttributeType=N \
+      AttributeName=location_id,AttributeType=S \
+      AttributeName=hour_ts,AttributeType=S \
     --key-schema \
-      AttributeName=sensor_id,KeyType=HASH \
-      AttributeName=timestamp,KeyType=RANGE \
+      AttributeName=location_id,KeyType=HASH \
+      AttributeName=hour_ts,KeyType=RANGE \
     --billing-mode PAY_PER_REQUEST \
     --region "$REGION" > /dev/null
-  wait_for_table NoiseData
-  enable_ttl NoiseData ttl
-  echo "      OK    NoiseData created (placeholder — Jose's vertical)"
+  wait_for_table UVData
+  enable_ttl UVData ttl
+  echo "      OK    UVData created"
 fi
+
+# -- PollenData --
+if table_exists PollenData > /dev/null 2>&1; then
+  echo "      SKIP  PollenData already exists"
+else
+  aws dynamodb create-table \
+    --table-name PollenData \
+    --attribute-definitions \
+      AttributeName=location_species,AttributeType=S \
+      AttributeName=hour_ts,AttributeType=S \
+    --key-schema \
+      AttributeName=location_species,KeyType=HASH \
+      AttributeName=hour_ts,KeyType=RANGE \
+    --billing-mode PAY_PER_REQUEST \
+    --region "$REGION" > /dev/null
+  wait_for_table PollenData
+  enable_ttl PollenData ttl
+  echo "      OK    PollenData created"
+fi
+
 
 # ---------------------------------------------------------------------------
 # 3. IAM Roles
@@ -325,7 +349,7 @@ create_lambda_role \
 # ---------------------------------------------------------------------------
 echo ""
 echo "[4/5] Waiting for tables to become ACTIVE..."
-for TABLE in BicingStations TransitStops ScheduleCache AirQualityReadings WeatherData NoiseData; do
+for TABLE in BicingStations TransitStops ScheduleCache AirQualityReadings WeatherData UVData PollenData; do
   STATUS=$(aws dynamodb describe-table --table-name "$TABLE" --region "$REGION" \
     --query 'Table.TableStatus' --output text 2>/dev/null || echo "MISSING")
   if [ "$STATUS" = "ACTIVE" ]; then
@@ -343,7 +367,7 @@ echo "[5/5] Setup complete. Summary:"
 echo ""
 echo "  S3 bucket    : s3://${BUCKET}"
 echo "  DynamoDB     : BicingStations, TransitStops, ScheduleCache"
-echo "                 AirQualityReadings, WeatherData, NoiseData"
+echo "                 AirQualityReadings, WeatherData, UVData, PollenData"
 echo "  IAM roles    : smart-city-lambda-mobility-role"
 echo "                 smart-city-lambda-air-quality-role"
 echo "                 smart-city-lambda-weather-role"
