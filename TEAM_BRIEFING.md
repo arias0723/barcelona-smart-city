@@ -155,15 +155,15 @@ barcelona-smart-city/
 
 ### Jakub — Mobility vertical + MCP server + Infrastructure
 
-- Designed the full AWS architecture: DynamoDB schema, IAM roles, EventBridge schedules, API Gateway
 - All deployment scripts: `setup.sh`, `deploy.sh`, `pause.sh`, `teardown.sh`
 - **Bicing + Transit vertical**: `bicing_ingest` Lambda, GTFS loader (3 453 stops), `get_bicing`, `get_bicing_history`, `get_transit_nearby`, `get_transit_route` MCP tools
 - **MCP server** (`mcp_server.py`): all 11 tools, FastMCP, deployed as Lambda behind API Gateway
 - **Demo web app** (`demo/app.py`, `demo/index.html`): FastAPI backend, Bedrock/Claude Haiku integration, Leaflet map, route planner, AI chat
 - Research presentation: **live demo** (connected MCP to claude.ai, showed real tool calls live)
 
-### Mark — Air Quality vertical + MCP research
+### Mark — Air Quality vertical + AWS architecture + MCP research
 
+- Designed the full AWS architecture: DynamoDB schema, IAM roles, EventBridge schedules, API Gateway
 - **Air quality vertical**: found Open Data BCN XVPCA API (4 Barcelona monitoring stations), wrote `air_quality_ingest` Lambda, designed `AirQualityReadings` DynamoDB schema
 - `get_air_quality` + `get_air_quality_history` MCP tools, with WHO threshold labelling (good / moderate / unhealthy)
 - Research presentation: **MCP section** — explained the protocol, JSON-RPC handshake, tool primitives
