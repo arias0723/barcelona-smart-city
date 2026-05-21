@@ -8,7 +8,7 @@ import os
 import sys
 import time
 from decimal import Decimal
-from typing import Any, AsyncGenerator
+from typing import Any, AsyncGenerator, Optional
 
 import polyline as pl
 import requests
@@ -354,7 +354,7 @@ app = FastAPI(title="Barcelona Smart City Demo")
 class ChatRequest(BaseModel):
     message: str
     history: list[dict] = []
-    user_location: dict | None = None  # {lat, lon} if browser granted geolocation
+    user_location: Optional[dict] = None  # {lat, lon} if browser granted geolocation
 
 
 @app.get("/", response_class=HTMLResponse)
